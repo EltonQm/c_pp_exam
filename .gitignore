@@ -1,3 +1,45 @@
-# Ignore C/C++ object files
-*.o
+# -------------------------------------------------
+# C / C++ build artifacts
+# -------------------------------------------------
+*.o              # Object files
+*.a              # Static libraries
+*.so             # Shared libraries (Linux)
+*.dylib          # Shared libraries (macOS)
+*.exe            # Windows executables
+*.out            # Default executable name
+*.obj            # MSVC object files
+*.lib            # MSVC libraries
+*.dll            # Windows DLLs
+*.pdb            # MSVC debug symbols
+*.exp            # MSVC export files
+
+# -------------------------------------------------
+# Build directories
+# -------------------------------------------------
+/build/
+/dist/
+/bin/
+/obj/
+
+# -------------------------------------------------
+# Compiler-specific files
+# -------------------------------------------------
+*.d              # Dependency files (gcc/clang)
+*.mod            # Fortran module files (sometimes generated in mixed projects)
+
+# -------------------------------------------------
+# macOS system files
+# -------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# -------------------------------------------------
+# Editor / IDE files
+# -------------------------------------------------
+*.swp            # Vim swap files
+*.swo
+*~               # Temp files
+.vscode/
+.idea/
 
