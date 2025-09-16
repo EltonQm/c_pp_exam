@@ -1,0 +1,23 @@
+##-*- makefile -*-############################################################
+#
+# Copyright (C) 2025 Detlef Groth.
+#
+# All rights reserved.
+#
+# Synopsis:    
+# Authors:     Detlef Groth
+#
+##############################################################################
+
+CURRENT_MAKEFILE := $(lastword $(MAKEFILE_LIST))
+CFILES := pex.cpp main.cpp 
+## argument delegation
+ARGS=
+
+## default: list existing tasks 
+.PHONY: tasks
+tasks:  ## list all tasks
+	@grep -Eo '^[a-z0-9]+:.+' $(CURRENT_MAKEFILE) | sed -E 's/:\s+##/\t- /g'
+
+compile: ## compile the application
+	g++ -std=c++17 -Wall -O3 $(CFILES) -o app

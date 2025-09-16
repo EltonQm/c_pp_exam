@@ -1,0 +1,19 @@
+{
+    "version": "2.0.0",
+    "configurations": [
+      {
+        "name": "Run with g++14",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${fileDirname}/${fileBasenameNoExtension}",
+        "args": [],
+        "stopAtEntry": false,
+        "cwd": "${fileDirname}",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "lldb",
+        "preLaunchTask": "C/C++: g++14 build active file"
+      }
+    ]
+  }
+  
