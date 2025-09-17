@@ -95,19 +95,11 @@ int main(int argc, char *argv[])
 
   if (mode_consider)
   { // Check consider-table mode
-    std::vector<std::vector<std::string>> result = process_consider_table(valid_files, valid_namespaces);
-    for (const auto &row : result)
-    {                                                // Loop result pairs
-      std::cout << row[0] << "\t" << row[1] << "\n"; // Print GO-ID pair
-    }
+    process_consider_table(valid_files, valid_namespaces);
   }
   else if (mode_obsolete)
   { // Check obsolete-stats mode
-    std::vector<std::vector<std::string>> result = process_obsolete_stats(valid_files, valid_namespaces);
-    for (const auto &row : result)
-    {                                                // Loop result pairs
-      std::cout << row[0] << "\t" << row[1] << "\n"; // Print GO-ID pair
-    }
+    process_obsolete_stats(valid_files, valid_namespaces);
   }
 
   return 0; // Exit successfully
