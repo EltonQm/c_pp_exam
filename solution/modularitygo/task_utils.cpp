@@ -22,9 +22,9 @@ void usage(const std::string &progname)
 }
 
 // Print error with args (unused here)
-void print_command_error(                    // Print error message
-    const argparse::ArgumentParser &program, // program: parser
-    const std::vector<std::string> &args,    // args: cmd arguments
+void print_command_error(                 // Print error message
+    const argparse::ArgumentParser &,     // program: parser (unused)
+    const std::vector<std::string> &args, // args: cmd arguments
     const std::string &error_message)
 {                                                    // error_message: text
     std::cerr << "Error: " << error_message << "\n"; // Print error
