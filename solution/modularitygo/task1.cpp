@@ -95,11 +95,11 @@ int main(int argc, char *argv[])
 
   if (mode_consider)
   { // Check consider-table mode
-    process_consider_table(valid_files, valid_namespaces);
+    run_consider_table(valid_files, valid_namespaces);
   }
   else if (mode_obsolete)
   { // Check obsolete-stats mode
-    process_obsolete_stats(valid_files, valid_namespaces);
+    run_obsolete_stats(valid_files, valid_namespaces);
   }
 
   return 0; // Exit successfully

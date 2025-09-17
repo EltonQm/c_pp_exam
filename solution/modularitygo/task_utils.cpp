@@ -149,8 +149,8 @@ void print_invalid_namespace(             // Print namespace warnings
     }
 }
 
-// Process --consider-table command
-void process_consider_table(               // Process consider-table
+// CLI action for --consider-table (prints summary)
+void run_consider_table(                   // Process consider-table
     const std::vector<std::string> &files, // files: valid files
     const std::vector<std::string> &namespaces)
 {                                                     // namespaces: valid
@@ -159,8 +159,8 @@ void process_consider_table(               // Process consider-table
               << std::endl;                           // End with newline
 }
 
-// Process --obsolete-stats command
-void process_obsolete_stats(               // Process obsolete-stats
+// CLI action for --obsolete-stats (prints summary)
+void run_obsolete_stats(                   // Process obsolete-stats
     const std::vector<std::string> &files, // files: valid files
     const std::vector<std::string> &namespaces)
 {                                                     // namespaces: valid
