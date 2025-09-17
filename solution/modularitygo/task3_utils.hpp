@@ -5,7 +5,13 @@
 #include <string>
 #include <vector>
 
-class GOoboParserApp {
+namespace argparse
+{
+  class ArgumentParser;
+}
+
+class GOoboParserApp
+{
 public:
   void
   runObsoleteStats(const std::vector<std::string> &files,

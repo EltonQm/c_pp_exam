@@ -1,9 +1,14 @@
 #ifndef TASK_UTILS_HPP // Prevent multiple inclusions
 #define TASK_UTILS_HPP // Define header guard
 
-#include <argparse/argparse.hpp> // Parse command-line args
-#include <vector>                // Dynamic arrays
-#include <string>                // String operations
+#include <vector> // Dynamic arrays
+#include <string> // String operations
+
+// Forward declaration
+namespace argparse
+{
+    class ArgumentParser;
+}
 
 // Print program usage instructions
 void usage(const std::string &progname); // progname: program name
