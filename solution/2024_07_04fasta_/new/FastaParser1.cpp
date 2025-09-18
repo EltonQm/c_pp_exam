@@ -1,249 +1,317 @@
+// file2.cpp — FastaParser with custom usage (distinct from argparse --help)
+
 #include <argparse/argparse.hpp>
 #include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <cctype>
 #include <algorithm>
-#include <iterator>
 #include <regex>
+#include <unordered_set>
+#include <sstream>
+#include <iterator>
 
 namespace fs = std::filesystem;
 
-// usage
-void usage()
+// ---------------------------------------------------------------
+// Custom quick-usage (distinct from argparse's --help)
+// ---------------------------------------------------------------
+static void usage(const std::string &progname)
 {
-    std::cout << "Usage examples:\n"
-              << " --search PATTERN FILE1 [FILE2...]\n"
-              << " --search PATTERN1 PATTERN2 FILE1 [FILE2...]\n"
-              << " --summary FILE1 [FILE2...]\n"
-              << " --help   (shows help message)\n\n"
-              << "Note: FILE arguments must end with .fasta\n";
+    std::cout
+        << "Usage (quick):\n"
+        << "  " << progname << " --search <PATTERN... FILE...>\n"
+        << "  " << progname << " --summary <FILE...>\n\n"
+        << "Examples:\n"
+        << "  " << progname << " --search sp|P59637|VEMP_CVHSA sequences.fasta\n"
+        << "  " << progname << " --search sp|Q9H0H5|ABC_HUMAN seq1.fasta seq2.fasta\n"
+        << "  " << progname << " --summary seq1.fasta seq2.fasta\n\n"
+        << "Notes:\n"
+        << "  • FILE must end with .fasta or .fasta.gz\n"
+        << "  • PATTERN should be a UniProt-style ID like sp|P59637|VEMP_CVHSA\n"
+        << "For detailed options, run: " << progname << " --help\n";
 }
 
-// Checks if a file path has a .fasta extension (case insensitive)
+// ---------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------
+
 static bool has_fasta_ext(const std::string &path)
 {
-    // Find the last occurrence of '.' in the path
-    auto pos = path.rfind('.');
+    auto to_lower = [](std::string s)
+    {
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c)
+                       { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+    std::string lower = to_lower(path);
 
-    // If no '.' found, it has no extension
-    if (pos == std::string::npos)
+    return ((lower.size() >= 6 && lower.rfind(".fasta") == lower.size() - 6) ||
+            (lower.size() >= 9 && lower.rfind(".fasta.gz") == lower.size() - 9));
+}
+
+// Heuristic: treat strings with a dot as file-like
+static inline bool looks_like_file(const std::string &s)
+{
+    return s.find('.') != std::string::npos;
+}
+
+// UniProt FASTA header ID (e.g., sp|P59637|VEMP_CVHSA)
+static inline bool is_valid_uniprot_pattern(const std::string &p)
+{
+    static const std::regex rx(R"(^[a-z]{2}\|[A-Z0-9]+\|[A-Z0-9_]+$)",
+                               std::regex::icase);
+    return std::regex_match(p, rx);
+}
+
+// ---------------------------------------------------------------
+// Data structs
+// ---------------------------------------------------------------
+struct ParsedArgs
+{
+    std::vector<std::string> files;
+    std::vector<std::string> patterns;
+    std::vector<std::string> invalid_items;
+};
+
+// Split mixed arguments into files / patterns / invalids.
+// - File: looks_like_file && has_fasta_ext
+// - Pattern: not file-like && valid UniProt pattern
+// - Otherwise: invalid
+static ParsedArgs separate_files_and_patterns(const std::vector<std::string> &args)
+{
+    ParsedArgs out;
+    std::unordered_set<std::string> seen;
+
+    for (const auto &arg : args)
+    {
+        if (!seen.insert(arg).second)
+            continue; // skip duplicates
+
+        if (looks_like_file(arg))
+        {
+            if (has_fasta_ext(arg))
+                out.files.push_back(arg);
+            else
+                out.invalid_items.push_back(arg);
+        }
+        else
+        {
+            if (is_valid_uniprot_pattern(arg))
+                out.patterns.push_back(arg);
+            else
+                out.invalid_items.push_back(arg);
+        }
+    }
+    return out;
+}
+
+// Validate existence of files; return those that exist, else print quick-usage
+static std::vector<std::string> validate_file_existence(
+    const std::vector<std::string> &files,
+    const std::string &progname)
+{
+    std::vector<std::string> ok, missing;
+
+    for (const auto &f : files)
+    {
+        try
+        {
+            if (fs::exists(f) && fs::is_regular_file(f))
+                ok.push_back(f);
+            else
+                missing.push_back(f);
+        }
+        catch (const fs::filesystem_error &e)
+        {
+            std::cerr << "Warning: cannot access '" << f << "': " << e.what() << "\n";
+            missing.push_back(f);
+        }
+    }
+
+    if (!missing.empty())
+    {
+        std::ostringstream oss;
+        oss << "File(s) not found: ";
+        for (size_t i = 0; i < missing.size(); ++i)
+        {
+            if (i)
+                oss << ", ";
+            oss << "'" << missing[i] << "'";
+        }
+        std::cerr << "Error: " << oss.str() << "\n\n";
+        usage(progname);
+        return {};
+    }
+
+    return ok;
+}
+
+// Report invalid tokens using quick-usage style
+static bool report_invalid_items(
+    const std::vector<std::string> &invalid_items,
+    const std::string &progname)
+{
+    if (invalid_items.empty())
         return false;
 
-    // Extract substring after the last '.'
-    std::string ext = path.substr(pos + 1);
-
-    // Convert extension to lowercase
-    for (char &c : ext)
-        c = tolower(c);
-
-    // Check if extension equals "fasta"
-    return ext == "fasta";
-}
-
-// print error message
-void print_command_error(argparse::ArgumentParser &program,
-                         const std::vector<std::string> & /*args*/,
-                         const std::string &error_message)
-{
-    std::cerr << "Error: " << error_message << "\n\n"
-              << program; // prints usage/help text
-}
-
-// Validate FASTA files and exit on error
-std::vector<std::string> validate_files(argparse::ArgumentParser &program,
-                                        const std::vector<std::string> &args,
-                                        const std::vector<std::string> &files)
-{
-    if (files.empty())
+    std::ostringstream oss;
+    oss << "Invalid argument(s): ";
+    for (size_t i = 0; i < invalid_items.size(); ++i)
     {
-        print_command_error(program, args, "No input files provided");
-    }
-
-    std::vector<std::string> valid_files;
-    static const std::regex dot_checker_regex(R"(\.)");
-
-    for (const auto &filepath : files)
-        if (std::regex_search(filepath, dot_checker_regex))
-
+        if (i)
+            oss << ", ";
+        oss << "'" << invalid_items[i] << "'";
+        if (looks_like_file(invalid_items[i]) && !has_fasta_ext(invalid_items[i]))
         {
-            if (!has_fasta_ext(filepath))
-            {
-                print_command_error(program, args,
-                                    "Invalid extension: '" + filepath + "'. Expected '.fasta'.");
-            }
-            if (!fs::exists(filepath))
-            {
-                print_command_error(program, args,
-                                    "File not found: '" + filepath + "'");
-            }
-            if (has_fasta_ext(filepath) && fs::exists(filepath))
-            {
-                valid_files.push_back(filepath);
-            }
+            oss << " (expected '.fasta' or '.fasta.gz')";
         }
-
-        else
+        else if (!looks_like_file(invalid_items[i]))
         {
-            continue;
-        }
-    return valid_files;
-}
-
-// validate pattern
-std::vector<std::string> validate_pattern(argparse::ArgumentParser &program,
-                                          const std::vector<std::string> &args,
-                                          const std::vector<std::string> &patterns)
-{
-    if (patterns.empty())
-    {
-        print_command_error(program, args, "No input Arguments");
-    }
-
-    std::vector<std::string> valid_patterns;
-
-    static const std::regex dot_checker_regex(R"(\.)");
-
-    for (const auto &valid_pattern : patterns)
-
-    {
-        if (std::regex_search(valid_pattern, dot_checker_regex))
-        {
-            continue;
-        }
-        else
-        {
-            if (!has_fasta_ext(valid_pattern))
-            {
-                valid_patterns.push_back(valid_pattern);
-            }
-
-            if (valid_patterns.empty())
-            {
-                print_command_error(program, args, "No input Pattern");
-            }
+            oss << " (invalid UniProt pattern; e.g., sp|P59637|VEMP_CVHSA)";
         }
     }
-    return valid_patterns;
+    std::cerr << "Error: " << oss.str() << "\n\n";
+    usage(progname);
+    return true;
 }
 
+// ---------------------------------------------------------------
+// Processing stubs
+// ---------------------------------------------------------------
+static void process_search(const std::vector<std::string> &patterns,
+                           const std::vector<std::string> &files)
+{
+    std::cout << "Search Mode\n";
+    std::cout << "Patterns (" << patterns.size() << "):\n";
+    for (const auto &p : patterns)
+        std::cout << "  - " << p << "\n";
+    std::cout << "Files (" << files.size() << "):\n";
+    for (const auto &f : files)
+        std::cout << "  - " << f << "\n";
+    // TODO: implement actual search
+}
+
+static void process_summary(const std::vector<std::string> &files)
+{
+    std::cout << "Summary Mode\n";
+    std::cout << "Files (" << files.size() << "):\n";
+    for (const auto &f : files)
+        std::cout << "  - " << f << "\n";
+    // TODO: implement actual summary
+}
+
+// ---------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------
 int main(int argc, char *argv[])
 {
-    // Store original command line arguments
-    std::vector<std::string> args(argv, argv + argc);
+    const std::string progname = (argc > 0 ? std::string(argv[0]) : "FastaParser");
 
     argparse::ArgumentParser program("FastaParser", "1.0");
-    program.add_description(R"(
-Elton's FastaParser - FASTA file processor
-Author: Elton Ugbogu, University of Potsdam, 2025
-)");
+    program.add_description(
+        "Elton's FastaParser - FASTA file processor\n"
+        "Author: Elton Ugbogu, University of Potsdam, 2025");
+    // NOTE: We rely on argparse's built-in -h/--help; we do NOT add our own --help
 
-    // Argument setup
-    program.add_argument("--search")
-        .help("Search for PATTERN in FASTA files")
+    // Mutually exclusive: --search OR --summary (required one)
+    auto &mode = program.add_mutually_exclusive_group(true);
+    mode.add_argument("--search")
+        .help("Search for UniProt patterns in FASTA files")
+        .nargs(argparse::nargs_pattern::at_least_one);
+    mode.add_argument("--summary")
+        .help("Summarize FASTA files")
         .nargs(argparse::nargs_pattern::at_least_one);
 
-    program.add_argument("--summary")
-        .help("Generate summary of FASTA files")
-        .nargs(argparse::nargs_pattern::at_least_one);
-
+    // Parse args
     try
     {
         program.parse_args(argc, argv);
     }
     catch (const std::exception &err)
     {
-        print_command_error(program, args, err.what());
-    }
-
-    auto search_args = program.get<std::vector<std::string>>("--search");
-    auto summary_args = program.get<std::vector<std::string>>("--summary");
-
-    bool mode_search = !search_args.empty();
-    bool mode_summary = !summary_args.empty();
-
-    if (mode_search && mode_summary)
-    {
-        print_command_error(program, args,
-                            "--search and --summary are mutually exclusive");
+        // Let argparse show its error; then show our quick usage
+        std::cerr << "Error: " << err.what() << "\n\n";
+        usage(progname);
         return 1;
     }
 
+    // If neither mode was given (shouldn’t happen with required group, but handle anyway)
+    const bool mode_search = program.is_used("--search");
+    const bool mode_summary = program.is_used("--summary");
     if (!mode_search && !mode_summary)
     {
+        usage(progname);
+        return 0;
+    }
+    if (mode_search && mode_summary)
+    {
+        std::cerr << "Error: choose either --search or --summary.\n\n";
+        usage(progname);
+        return 1;
+    }
 
-        usage();
+    // Gather raw args
+    std::vector<std::string> raw = mode_search
+                                       ? program.get<std::vector<std::string>>("--search")
+                                       : program.get<std::vector<std::string>>("--summary");
+
+    if (raw.empty())
+    {
+        std::cerr << "Error: missing arguments for selected mode.\n\n";
+        usage(progname);
+        return 1;
+    }
+
+    // Separate and validate
+    auto parsed = separate_files_and_patterns(raw);
+
+    if (report_invalid_items(parsed.invalid_items, progname))
+    {
         return 1;
     }
 
     if (mode_search)
-
     {
-        if (search_args.size() < 1)
+        if (parsed.patterns.empty())
         {
-            print_command_error(program, args,
-                                "--search requires at least a PATTERN and one FASTA file");
+            std::cerr << "Error: --search requires at least one UniProt pattern.\n\n";
+            usage(progname);
             return 1;
         }
-        else
+        if (parsed.files.empty())
         {
-            // for (const auto &arguments : search_args)
-
-            auto valid_files = validate_files(program, args, search_args);
-            for (const auto &file : valid_files)
-            {
-                std::cout << "  Processing: " << file << "\n";
-                // Search implementation would go here
-            }
-            auto valid_patterns = validate_pattern(program, args, search_args);
-
-            if (valid_patterns.empty())
-            {
-                print_command_error(program, args, "No input Pattern");
-                return 1;
-            }
-
-            for (const auto &val_pattern : valid_patterns)
-            {
-                std::cout << "Searching for pattern: " << val_pattern << "\n";
-                // Search implementation would go here
-            }
-        }
-        return 0;
-    }
-
-    if (mode_summary)
-    {
-        // if (search_args.empty() && !summary_args.empty())
-        //{ // summary mode
-        if (summary_args.size() < 1)
-        {
-            print_command_error(program, args,
-                                "Incomplete argument; At least one file needed");
+            std::cerr << "Error: --search requires at least one FASTA file.\n\n";
+            usage(progname);
             return 1;
         }
-        else
+    }
+    else
+    { // summary
+        if (!parsed.patterns.empty())
         {
-            // for (const auto &arguments : summary_args)
-            //{
-            auto valid_patterns = validate_pattern(program, args, summary_args);
-            if (!valid_patterns.empty())
-            {
-                print_command_error(program, args,
-                                    "No Pattern required");
-                return 1;
-            }
-            auto valid_files = validate_files(program, args, summary_args);
-            for (const auto &file : valid_files)
-            {
-                std::cout << "  Processing: " << file << "\n";
-                // Search implementation would go here
-            }
-            std::cout << "Implementing Summary" << "\n ";
-            //}
-            return 0;
+            std::cerr << "Error: --summary does not accept patterns.\n\n";
+            usage(progname);
+            return 1;
+        }
+        if (parsed.files.empty())
+        {
+            std::cerr << "Error: --summary requires at least one FASTA file.\n\n";
+            usage(progname);
+            return 1;
         }
     }
-    return 1;
+
+    auto valid_files = validate_file_existence(parsed.files, progname);
+    if (valid_files.empty())
+        return 1;
+
+    // Execute
+    if (mode_search)
+        process_search(parsed.patterns, valid_files);
+    else
+        process_summary(valid_files);
+
+    return 0;
 }
