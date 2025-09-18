@@ -1,198 +1,358 @@
-// FastaParser2.cpp
-#include <argparse/argparse.hpp>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <regex>
-#include <string>
-#include <tuple>
-#include <vector>
+#include <argparse/argparse.hpp> // Command-line argument parsing
+#include <filesystem>            // File system operations
+#include <fstream>               // File stream operations
+#include <iostream>              // Console input/output
+#include <regex>                 // Regular expression matching
+#include <string>                // String operations
+#include <tuple>                 // Tuple data structure
+#include <unordered_set>         // Hash set for deduplication
+#include <vector>                // Dynamic arrays
+#include <stdexcept>             // Exception handling
+#include <cctype>                // Character classification
+#include <algorithm>             // String transformations
+#include <sstream>               // String stream operations
 
-namespace fs = std::filesystem;
+namespace fs = std::filesystem; // Alias for filesystem namespace
 
-// Result tuple: (sequence_id, pattern, matched?)
+// Tuple to store sequence ID, pattern, and match result
 using SearchTuple = std::tuple<std::string, std::string, bool>;
 
-static void print_banner(const std::string &prog)
-{
-    std::cout
-        << "Detlef's FastaParser2 search FASTA files\n"
-        << "Author: Detlef Groth, University of Potsdam, 2020\n"
-        << "Usage: " << prog << " --search|--summary|--help ?PATTERN? file.fasta\n\n"
-        << "Modes:\n"
-        << "  --search PATTERN file.fasta  Search (regex) for PATTERN in sequences.\n"
-        << "  --summary file.fasta         (Task 3) Print sequence lengths.\n"
-        << "  --help                       Show this help.\n";
+// Display program usage with examples
+static void usage(const std::string &prog)
+{ // prog: program name
+    std::cout << "Usage:\n"
+              << "  " << prog << " --search <FILES and PATTERNS in any order>\n"
+              << "  " << prog << " --summary <FILES...>\n\n"
+              << "Examples:\n"
+              << "  " << prog << " --search sars-cov1.fasta \"MAT\"\n"
+              << "  " << prog << " --search \"sp|P59637|VEMP_CVHSA\" sars-cov2.fasta sars-cov1.fasta\n"
+              << "  " << prog << " --search sars-cov1.fasta sars-cov2.fasta \"A.T\" \"MAT\"\n"
+              << "  " << prog << " --summary sars-cov1.fasta sars-cov2.fasta\n\n"
+              << "Notes:\n"
+              << "  - Files must have .fasta or .fasta.gz extension (case-insensitive).\n"
+              << "  - Patterns are regular expressions; quote complex patterns.\n"
+              << "  - Search concatenates sequence lines, ignoring line breaks.\n"
+              << "Run '" << prog << " --help' for detailed options.\n";
 }
 
+// Convert string to lowercase
+static std::string to_lower(std::string s)
+{                                                 // s: input string
+    std::transform(s.begin(), s.end(), s.begin(), // Transform to lowercase
+                   [](unsigned char c)
+                   { return static_cast<char>(std::tolower(c)); });
+    return s; // Return lowercase string
+}
+
+// Check if string ends with suffix (case-insensitive)
+static bool ends_with_ci(const std::string &s, // s: input string
+                         const std::string &suf)
+{ // suf: suffix to check
+    if (s.size() < suf.size())
+        return false;                                             // Check size
+    std::string tail = to_lower(s.substr(s.size() - suf.size())); // Get tail
+    std::string needle = to_lower(suf);                           // Lowercase suffix
+    return tail == needle;                                        // Compare strings
+}
+
+// Check if file has .fasta or .fasta.gz extension
+static bool has_fasta_ext(const std::string &path)
+{                                           // path: file path
+    return ends_with_ci(path, ".fasta") ||  // Check .fasta extension
+           ends_with_ci(path, ".fasta.gz"); // Check .fasta.gz extension
+}
+
+// Check if string resembles a file path
+static bool looks_like_path(const std::string &s)
+{                                               // s: input string
+    return s.find('/') != std::string::npos ||  // Check for slashes
+           s.find('\\') != std::string::npos || // Check for backslashes
+           s.find('.') != std::string::npos;    // Check for dots
+}
+
+// Extract extension after last dot
+static std::string ext_after_last_dot(const std::string &s)
+{                                                                          // s: input string
+    auto pos = s.rfind('.');                                               // Find last dot
+    return (pos == std::string::npos) ? std::string{} : s.substr(pos + 1); // Return extension
+}
+
+// Read FASTA file into vector of (ID, sequence) pairs
 static std::vector<std::pair<std::string, std::string>>
 read_fasta(const std::string &filename)
-{
-    std::ifstream in(filename);
+{                               // filename: input file path
+    std::ifstream in(filename); // Open input file
     if (!in)
-        throw std::runtime_error("Cannot open file: " + filename);
+    {                                                              // Check file opening
+        throw std::runtime_error("Cannot open file: " + filename); // Throw error
+    }
 
-    std::vector<std::pair<std::string, std::string>> records;
-    std::string line, id, seq;
+    std::vector<std::pair<std::string, std::string>> records; // Store records
+    std::string line, id, seq;                                // Current line, ID, sequence
 
-    auto flush = [&]()
-    {
+    auto flush = [&]() { // Flush current record
         if (!id.empty())
-        {
-            records.emplace_back(id, seq);
+        {                                  // Check if ID exists
+            records.emplace_back(id, seq); // Add record to vector
         }
-        id.clear();
-        seq.clear();
+        id.clear();  // Clear ID
+        seq.clear(); // Clear sequence
     };
 
     while (std::getline(in, line))
-    {
+    { // Read lines
         if (line.empty())
-            continue;
+            continue; // Skip empty lines
         if (line[0] == '>')
-        {
-            flush();
-            std::string rest = line.substr(1);
-            size_t sp = rest.find_first_of(" \t");
-            id = (sp == std::string::npos) ? rest : rest.substr(0, sp);
+        {                                                               // Check header line
+            flush();                                                    // Flush previous record
+            std::string rest = line.substr(1);                          // Extract header content
+            size_t sp = rest.find_first_of(" \t");                      // Find first space/tab
+            id = (sp == std::string::npos) ? rest : rest.substr(0, sp); // Extract ID
         }
         else
-        {
+        { // Sequence line
             for (char c : line)
-            {
+            { // Process characters
                 if (!std::isspace(static_cast<unsigned char>(c)))
-                    seq.push_back(c);
+                {                     // Skip whitespace
+                    seq.push_back(c); // Append to sequence
+                }
             }
         }
     }
-    flush();
-    return records;
+    flush();        // Flush final record
+    return records; // Return records
 }
 
+// Search sequences in FASTA file for pattern
 static std::vector<SearchTuple>
-searchSequence(const std::string &filename, const std::string &pattern)
-{
-    auto recs = read_fasta(filename);
-    std::vector<SearchTuple> out;
-    out.reserve(recs.size());
-    std::regex rgx(pattern);
-    for (auto &p : recs)
-    {
-        bool m = std::regex_search(p.second, rgx);
-        out.emplace_back(p.first, pattern, m);
+searchSequence(const std::string &filename, // filename: input file path
+               const std::string &pattern)
+{                                     // pattern: regex pattern
+    std::regex rgx(pattern);          // Create regex object
+    auto recs = read_fasta(filename); // Read FASTA records
+    std::vector<SearchTuple> out;     // Store search results
+    out.reserve(recs.size());         // Reserve space
+
+    for (const auto &rec : recs)
+    {                                                   // Iterate records
+        const std::string &seq_id = rec.first;          // Get sequence ID
+        const std::string &seq_str = rec.second;        // Get sequence
+        bool matched = std::regex_search(seq_str, rgx); // Perform regex search
+        out.emplace_back(seq_id, pattern, matched);     // Store result
     }
-    return out;
+    return out; // Return results
 }
 
-int main(int argc, char *argv[])
+// Structure to hold split arguments
+struct SplitArgs
 {
-    argparse::ArgumentParser program("FastaParser2");
-    program.add_description("Regex search in a FASTA file.");
+    std::vector<std::string> files_valid;             // Valid FASTA files
+    std::vector<std::string> files_invalid_wrong_ext; // Files with wrong extension
+    std::vector<std::string> files_invalid_missing;   // Missing FASTA files
+    std::vector<std::string> patterns;                // Search patterns
+};
 
-    program.add_argument("--help")
-        .help("Show help.")
-        .default_value(false)
-        .implicit_value(true);
+// Split tokens into files and patterns
+static SplitArgs split_tokens(const std::vector<std::string> &tokens)
+{                                                              // tokens: input arguments
+    SplitArgs out;                                             // Result structure
+    std::unordered_set<std::string> seen_files, seen_patterns; // Track unique files, patterns
 
-    program.add_argument("--search")
-        .help("Regex pattern to search (requires file).")
-        .nargs(1);
+    for (const auto &t : tokens)
+    { // Iterate tokens
+        if (looks_like_path(t))
+        { // Check if path-like
+            if (!has_fasta_ext(t))
+            {                                             // Check FASTA extension
+                out.files_invalid_wrong_ext.push_back(t); // Add invalid extension
+                continue;                                 // Skip to next token
+            }
+            if (fs::exists(t) && fs::is_regular_file(t))
+            {                                     // Check file existence
+                if (seen_files.insert(t).second)  // Check if unique
+                    out.files_valid.push_back(t); // Add valid file
+            }
+            else
+            {                                           // File missing
+                out.files_invalid_missing.push_back(t); // Add missing file
+            }
+        }
+        else
+        {                                       // Treat as pattern
+            if (seen_patterns.insert(t).second) // Check if unique
+                out.patterns.push_back(t);      // Add pattern
+        }
+    }
+    return out; // Return results
+}
 
-    program.add_argument("--summary")
-        .help("Summary mode (implemented in Task 3).")
-        .default_value(false)
-        .implicit_value(true);
+// Main program entry point
+int main(int argc, char *argv[])
+{                                                                                // argc, argv: command-line arguments
+    const std::string prog = (argc > 0 ? std::string(argv[0]) : "FastaParser2"); // Program name
 
-    program.add_argument("file")
-        .help("FASTA file.")
-        .nargs(argparse::nargs_pattern::optional);
+    argparse::ArgumentParser program("FastaParser2"); // Initialize argument parser
+    program.add_description(                          // Set description
+        "Regex search in FASTA files.\n"
+        "--search accepts mixed files and patterns in any order.");
+    auto &modes = program.add_mutually_exclusive_group(false); // Define mode group
+    modes.add_argument("--search")                             // Add search mode
+        .help("Search files for patterns; accepts mixed files and patterns.")
+        .nargs(argparse::nargs_pattern::at_least_one); // Require ≥1 argument
+    modes.add_argument("--summary")                    // Add summary mode
+        .help("Summarize FASTA files (placeholder for Task 3).")
+        .nargs(argparse::nargs_pattern::at_least_one); // Require ≥1 argument
 
     try
-    {
-        program.parse_args(argc, argv);
+    {                                   // Parse arguments
+        program.parse_args(argc, argv); // Process command-line
     }
     catch (const std::exception &e)
-    {
-        std::cerr << e.what() << "\n\n";
-        print_banner(argv[0]);
-        std::cerr << program;
-        return 1;
+    {                                                 // Handle parse errors
+        std::cerr << "Error: " << e.what() << "\n\n"; // Print error
+        usage(prog);                                  // Show usage
+        std::cout << program;                         // Show detailed help
+        return 1;                                     // Exit with error
     }
 
-    if (program.get<bool>("--help"))
-    {
-        print_banner(argv[0]);
-        std::cout << program;
-        return 0;
-    }
+    const bool mode_search = program.is_used("--search");   // Check search mode
+    const bool mode_summary = program.is_used("--summary"); // Check summary mode
 
-    bool mode_search = program.is_used("--search");
-    bool mode_summary = program.get<bool>("--summary");
-    int modes = (int)mode_search + (int)mode_summary;
-
-    if (modes == 0)
-    {
-        std::cerr << "Error: Must specify one of --search, --summary or --help.\n";
-        return 1;
+    if (!mode_search && !mode_summary)
+    {                // No mode specified
+        usage(prog); // Show usage
+        return 0;    // Exit successfully
     }
-    if (modes > 1)
-    {
-        std::cerr << "Error: --search and --summary are mutually exclusive.\n";
-        return 1;
+    if (mode_search && mode_summary)
+    {                                                                             // Both modes used
+        std::cerr << "Error: --search and --summary are mutually exclusive.\n\n"; // Print error
+        usage(prog);                                                              // Show usage
+        return 1;                                                                 // Exit with error
     }
-
-    std::string file = program.is_used("file") ? program.get<std::string>("file") : "";
 
     try
-    {
+    { // Process modes
         if (mode_search)
-        {
-            if (file.empty())
-            {
-                std::cerr << "Error: --search requires a FASTA file.\n";
-                return 1;
+        {                                                                       // Handle search mode
+            const auto raw = program.get<std::vector<std::string>>("--search"); // Get arguments
+            const auto split = split_tokens(raw);                               // Split into files/patterns
+
+            // Report invalid files
+            if (!split.files_invalid_wrong_ext.empty())
+            { // Check wrong extensions
+                for (const auto &f : split.files_invalid_wrong_ext)
+                { // Iterate invalid files
+                    std::cerr << "Error: invalid FASTA file " << f
+                              << " (.fasta or .fasta.gz required).\n"; // Print error
+                    std::string ext = ext_after_last_dot(f);           // Get extension
+                    std::cerr << "Extension: " << (ext.empty() ? "(none)" : "." + ext) << "\n";
+                }
+                std::cerr << "\n"; // Newline
+                usage(prog);       // Show usage
+                std::cerr << "\n"; // Newline
             }
-            auto pat_vec = program.get<std::vector<std::string>>("--search");
-            if (pat_vec.empty())
-            {
-                std::cerr << "Error: --search requires a pattern.\n";
-                return 1;
+            if (!split.files_invalid_missing.empty())
+            {                                              // Check missing files
+                std::cerr << "Warning: missing file(s): "; // Print warning
+                for (size_t i = 0; i < split.files_invalid_missing.size(); ++i)
+                { // Iterate files
+                    if (i)
+                        std::cerr << ", ";                                     // Add comma
+                    std::cerr << "'" << split.files_invalid_missing[i] << "'"; // Print file
+                }
+                std::cerr << "\n\n"; // Newline
             }
-            std::string pattern = pat_vec.front();
-            if (!fs::exists(file))
-            {
-                std::cerr << "Warning: File '" << file << "' does not exist.\n";
+
+            if (split.files_valid.empty())
+            {             // No valid files
+                return 1; // Exit with error
             }
-            auto results = searchSequence(file, pattern);
-            for (auto &row : results)
-            {
-                std::cout << std::get<0>(row) << "\t"
-                          << std::get<1>(row) << "\t"
-                          << (std::get<2>(row) ? "true" : "false") << "\n";
+
+            if (split.patterns.empty())
+            {                                                                      // No patterns
+                std::cerr << "Error: --search requires at least one pattern.\n\n"; // Print error
+                usage(prog);                                                       // Show usage
+                return 1;                                                          // Exit with error
             }
-            return 0;
+
+            for (const auto &vf : split.files_valid)
+            {                                              // Report valid files
+                std::cout << "Valid file: " << vf << "\n"; // Print valid file
+            }
+
+            // Search each file for each pattern using searchSequence
+            for (const auto &file : split.files_valid)
+            { // Iterate files
+                for (const auto &pattern : split.patterns)
+                {                                                 // Iterate patterns
+                    auto results = searchSequence(file, pattern); // Perform search
+                    for (const auto &result : results)
+                    {                                                                  // Iterate results
+                        std::cout << std::get<0>(result) << " "                        // Print sequence ID
+                                  << std::get<1>(result) << " "                        // Print pattern
+                                  << (std::get<2>(result) ? "true" : "false") << "\n"; // Print match
+                    }
+                }
+            }
+            return 0; // Exit successfully
         }
 
         if (mode_summary)
-        {
-            if (file.empty())
-            {
-                std::cerr << "Error: --summary requires a FASTA file.\n";
-                return 1;
+        {                                                                        // Handle summary mode
+            const auto raw = program.get<std::vector<std::string>>("--summary"); // Get arguments
+            const auto split = split_tokens(raw);                                // Split into files/patterns
+
+            if (!split.patterns.empty())
+            {                                                                  // Check for patterns
+                std::cerr << "Error: --summary does not accept patterns.\n\n"; // Print error
+                usage(prog);                                                   // Show usage
+                return 1;                                                      // Exit with error
             }
-            if (!fs::exists(file))
-            {
-                std::cerr << "Warning: File '" << file << "' does not exist.\n";
+
+            if (!split.files_invalid_wrong_ext.empty())
+            { // Check wrong extensions
+                for (const auto &f : split.files_invalid_wrong_ext)
+                { // Iterate invalid files
+                    std::cerr << "Error: invalid FASTA file " << f
+                              << " (.fasta or .fasta.gz required).\n"; // Print error
+                    std::string ext = ext_after_last_dot(f);           // Get extension
+                    std::cerr << "Extension: " << (ext.empty() ? "(none)" : "." + ext) << "\n";
+                }
+                std::cerr << "\n"; // Newline
+                usage(prog);       // Show usage
+                std::cerr << "\n"; // Newline
             }
-            std::cout << "(Task 2) Summary mode placeholder – implemented in Task 3.\n";
-            return 0;
+            if (!split.files_invalid_missing.empty())
+            {                                              // Check missing files
+                std::cerr << "Warning: missing file(s): "; // Print warning
+                for (size_t i = 0; i < split.files_invalid_missing.size(); ++i)
+                { // Iterate files
+                    if (i)
+                        std::cerr << ", ";                                     // Add comma
+                    std::cerr << "'" << split.files_invalid_missing[i] << "'"; // Print file
+                }
+                std::cerr << "\n\n"; // Newline
+            }
+
+            if (split.files_valid.empty())
+            {             // No valid files
+                return 1; // Exit with error
+            }
+
+            for (const auto &f : split.files_valid)
+            {                                                   // Summarize files
+                std::cout << "Summary for file: " << f << "\n"; // Print placeholder
+            }
+            return 0; // Exit successfully
         }
     }
     catch (const std::exception &ex)
-    {
-        std::cerr << "Error: " << ex.what() << "\n";
-        return 1;
+    {                                                // Handle runtime errors
+        std::cerr << "Error: " << ex.what() << "\n"; // Print error
+        return 1;                                    // Exit with error
     }
 
-    return 0;
+    return 0; // Exit successfully
 }
